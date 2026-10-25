@@ -2,6 +2,10 @@
 
 ![Rick Dangerous on the Game & Watch](docs/screens.png)
 
+
+<img width="2880" height="2160" alt="image" src="https://github.com/user-attachments/assets/4c09be60-4a04-4801-8e0c-e3ee94543f2d" />
+
+
 **Rick Dangerous** (Core Design, 1989) on the Nintendo Game & Watch (Zelda
 or Mario) with the [Retro-Go SD](https://github.com/sylverb/game-and-watch-retro-go-sd)
 firmware, as a **GWHB homebrew**: a `.bin` and its pack dropped in
