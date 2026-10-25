@@ -287,6 +287,11 @@ void lcd_swap(void)
     host_maybe_quit();
 }
 
+uint32_t lcd_is_swap_pending(void)
+{
+    return 0;
+}
+
 void lcd_wait_for_vblank(void)
 {
     host_platform_delay_ms(1);
@@ -616,14 +621,27 @@ int odroid_overlay_confirm(const char *text, bool yes_selected, void_callback_t 
 }
 void odroid_overlay_alert(const char *text) { (void)text; }
 
+/* The PC has no external flash: the file is read into memory. */
 uint8_t *odroid_overlay_cache_file_in_flash(const char *file_path, uint32_t *file_size_p,
                                             bool byte_swap)
 {
-    (void)file_path;
     (void)byte_swap;
+    FILE *f = fopen(file_path, "rb");
+    uint8_t *data = NULL;
+    long size = 0;
+    if (f && fseek(f, 0, SEEK_END) == 0 && (size = ftell(f)) > 0) {
+        data = malloc(size);
+        fseek(f, 0, SEEK_SET);
+        if (data && fread(data, 1, size, f) != (size_t)size) {
+            free(data);
+            data = NULL;
+        }
+    }
+    if (f)
+        fclose(f);
     if (file_size_p)
-        *file_size_p = 0;
-    return NULL;
+        *file_size_p = data ? (uint32_t)size : 0;
+    return data;
 }
 
 size_t odroid_overlay_cache_file_in_ram(const char *file_path, uint8_t *dest_address)
@@ -830,6 +848,20 @@ void *dtc_malloc(size_t size) { return malloc(size); }
 void *dtc_calloc(size_t count, size_t size) { return calloc(count, size); }
 size_t dtc_get_free_size(void) { return 64 * 1024; }
 
+int odroid_sdcard_mkdir(const char *path)
+{
+    char tmp[512];
+    snprintf(tmp, sizeof tmp, "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+    return mkdir(tmp, 0755) == 0 || errno == EEXIST ? 0 : -1;
+}
+
 void wdog_refresh(void)
 {
     host_poll_events();
@@ -846,3 +878,10 @@ void boot_magic_set(uint32_t magic) { (void)magic; }
 void SystemClock_Config(uint8_t new_oc_level) { (void)new_oc_level; }
 void uptime_inc(void) {}
 uint32_t uptime_get(void) { return host_platform_ticks_ms(); }
+
+void odroid_system_switch_app(int app)
+{
+    (void)app;
+    host_platform_shutdown();
+    exit(0);
+}

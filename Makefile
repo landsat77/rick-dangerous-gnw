@@ -15,13 +15,27 @@
 #######################################
 # core     → pack_core.py     → /cores/<name>.bin
 # homebrew → pack_homebrew.py → /homebrews/<name>.bin
-PROJECT_KIND ?= core
+PROJECT_KIND ?= homebrew
 
-CORE_NAME  := example
+CORE_NAME  := xrick
 CORE_ENTRY := app_main
 
+# xrick (the game, src/xrick) and xr_sys.c hold the game's state: their
+# variables go to the xrstate_* sections (save states, src/port/xr_state.c).
+XR_STATE_SOURCES := \
+$(wildcard src/xrick/*.c) \
+$(wildcard src/xrick/data/*.c) \
+src/xrick/system/basic_funcs.c \
+src/port/xr_sys.c
+
 CORE_C_SOURCES := \
-src/main.c
+$(XR_STATE_SOURCES) \
+src/port/xr_pack.c \
+src/port/xr_state.c \
+src/port/xr_main.c
+
+CORE_C_INCLUDES := -Isrc -Isrc/port
+CORE_LDSCRIPT := src/port/xr_core.ld
 
 # Relative path so Docker bind-mounts work (do NOT use $(abspath) — it
 # bakes the host path into Make prerequisites / .d files). Do not name
@@ -76,14 +90,14 @@ HEADER_LOGO := src/assets/header.png
 
 else ifeq ($(PROJECT_KIND),homebrew)
 CORE_C_DEFS := \
--DPROJECT_KIND_HOMEBREW=1
+-DPROJECT_KIND_HOMEBREW=1 \
+-DGNW
 
-PACKED_BIN := ExampleHB.bin
-HB_NAME    := Example Homebrew
-# Compact coverflow tile (HW max is 186x100 — do not use full width by default).
+PACKED_BIN := RickDangerous.bin
+HB_NAME    := Rick Dangerous
+# The launcher's cover: src/assets/cover.png (the title screen).
 COVER_JPG    := $(BUILD_DIR)/cover.jpg
-COVER_WIDTH  ?= 128
-COVER_HEIGHT ?= 96
+COVER_SRC    := src/assets/cover.png
 
 else
 $(error PROJECT_KIND must be 'core' or 'homebrew' (got '$(PROJECT_KIND)'))
@@ -93,7 +107,38 @@ include $(GNW_CORE_SDK)/Makefile
 
 PACK_CORE     := $(GNW_CORE_SDK)/tools/pack_core.py
 PACK_HOMEBREW := $(GNW_CORE_SDK)/tools/pack_homebrew.py
-GEN_COVER     := scripts/gen_homebrew_cover.py
+MAKE_COVER    := scripts/make_cover.py
+
+# The game's state (save states): xrick's objects without data sections,
+# their .data / .bss renamed by the objcopy step of the compile rule (the
+# linker script keeps them in .data / .bss between __start/__stop symbols).
+XR_STATE_OBJECTS := $(addprefix $(BUILD_DIR)/,$(notdir $(XR_STATE_SOURCES:.c=.o)))
+$(XR_STATE_OBJECTS): CFLAGS += -fno-data-sections -Wno-unused-variable -Wno-unused-but-set-variable
+$(XR_STATE_OBJECTS): CP = $(PREFIX)objcopy --rename-section .data=xrstate_data --rename-section .bss=xrstate_bss
+
+#######################################
+# Game data: the pack (RickDangerous.xrk)
+#######################################
+# The data of Rick Dangerous as xrick has it (Pierluigi Vicinanza's xrick,
+# "assets" folder), fetched at a fixed commit.
+XRICK_DATA_REPO   := https://github.com/foolsh/xrick
+XRICK_DATA_COMMIT := f7dd969f7a7467c0ed79fdeb24345119ee83aad3
+XRICK_DATA_DIR    := build/xrick-data
+PACK_FILE         := RickDangerous.xrk
+
+.PHONY: data game-pack
+data: $(XRICK_DATA_DIR)/assets/archives/filelist.dat
+
+$(XRICK_DATA_DIR)/assets/archives/filelist.dat:
+	$(V)$(ECHO) "[ DATA ] $(XRICK_DATA_REPO) @ $(XRICK_DATA_COMMIT)"
+	$(V)rm -rf $(XRICK_DATA_DIR) && mkdir -p $(XRICK_DATA_DIR)
+	$(V)git -C $(XRICK_DATA_DIR) init -q
+	$(V)git -C $(XRICK_DATA_DIR) fetch -q --depth 1 $(XRICK_DATA_REPO) $(XRICK_DATA_COMMIT)
+	$(V)git -C $(XRICK_DATA_DIR) checkout -q FETCH_HEAD -- assets
+
+game-pack: $(PACK_FILE)
+$(PACK_FILE): tools/make_pack.py $(XRICK_DATA_DIR)/assets/archives/filelist.dat
+	$(V)python3 tools/make_pack.py $(XRICK_DATA_DIR)/assets $@
 
 #######################################
 # Packed header version
@@ -131,13 +176,10 @@ cover: $(COVER_JPG)
 
 # Must stay ≤ gui.c COVER_MAX_WIDTH x COVER_MAX_HEIGHT (186x100) and
 # COVER_SIZE (10 KiB) — oversized covers smash the HW JPEG scratch.
-$(COVER_JPG): $(GEN_COVER)
-	$(V)$(ECHO) [ COVER ] $(COVER_JPG) ($(COVER_WIDTH)x$(COVER_HEIGHT))
-	$(V)python3 $(GEN_COVER) \
-		--out $(COVER_JPG) \
-		--title "$(HB_NAME)" \
-		--width $(COVER_WIDTH) \
-		--height $(COVER_HEIGHT)
+$(COVER_JPG): $(MAKE_COVER) $(COVER_SRC)
+	$(V)mkdir -p $(BUILD_DIR)
+	$(V)$(ECHO) "[ COVER ] $(COVER_JPG)"
+	$(V)python3 $(MAKE_COVER) --in $(COVER_SRC) --out $(COVER_JPG)
 
 pack: $(TARGET_BIN) $(COVER_JPG)
 	$(V)$(ECHO) [ PACK GWHB ] $(PACKED_BIN) version=$(CORE_VERSION)
@@ -149,7 +191,15 @@ pack: $(TARGET_BIN) $(COVER_JPG)
 
 endif
 
-all: pack
+# The SD card's files: build/sd/homebrews/RickDangerous.bin + .xrk
+SD_DIR := build/sd/homebrews
+.PHONY: sd
+sd: pack $(PACK_FILE)
+	$(V)mkdir -p $(SD_DIR)
+	$(V)cp $(PACKED_BIN) $(PACK_FILE) $(SD_DIR)/
+	$(V)$(ECHO) "[ SD ] $(SD_DIR)/$(PACKED_BIN) + $(PACK_FILE)"
+
+all: pack sd
 
 # Read-only helpers for CI / scripts (make print-PROJECT_KIND, etc.).
 .PHONY: print-PROJECT_KIND print-PACKED_BIN print-CORE_NAME print-DOCKER_IMAGE \
@@ -170,7 +220,7 @@ print-CORE_VERSION:
 	@echo $(CORE_VERSION)
 
 clean::
-	$(V)rm -f $(PACKED_BIN)
+	$(V)rm -f $(PACKED_BIN) $(PACK_FILE)
 ifeq ($(PROJECT_KIND),homebrew)
 	$(V)rm -f $(COVER_JPG)
 endif

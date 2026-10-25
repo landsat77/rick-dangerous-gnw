@@ -15,7 +15,7 @@ HOST_CC    ?= cc
 HOST_BUILD_DIR := build/host/$(PROJECT_KIND)_sdl$(HOST_SDL)
 
 ifeq ($(PROJECT_KIND),homebrew)
-HOST_BIN := ExampleHB_host
+HOST_BIN := RickDangerous_host
 else
 HOST_BIN := $(CORE_NAME)_host
 endif
@@ -48,6 +48,7 @@ HOST_DEFS := \
 	$(CORE_C_DEFS)
 
 HOST_INCLUDES := \
+	$(CORE_C_INCLUDES) \
 	-Ihost \
 	-Ihost/stubs \
 	-I$(GNW_CORE_SDK)/src \
@@ -58,7 +59,7 @@ HOST_INCLUDES := \
 	-I$(HOST_INC_ROOT)/Core/Src/porting/lib/FatFs \
 	$(HOST_PKG_CFLAGS)
 
-HOST_CFLAGS := -O2 -g -Wall -Wextra -std=c11 \
+HOST_CFLAGS := -O2 -g -Wall -Wextra -std=gnu11 -fno-pie \
 	-include host/stubs/config.h \
 	$(HOST_DEFS) $(HOST_INCLUDES)
 
@@ -80,13 +81,22 @@ host: $(HOST_BIN)
 
 $(HOST_BIN): $(HOST_OBJS)
 	$(V)$(ECHO) [ LD HOST ] $@
-	$(V)$(HOST_CC) -o $@ $(HOST_OBJS) $(HOST_PKG_LIBS)
+	$(V)$(HOST_CC) -no-pie -o $@ $(HOST_OBJS) $(HOST_PKG_LIBS)
+
+# The game's state objects (Makefile: XR_STATE_SOURCES): .data / .bss
+# renamed, the host linker defines __start_/__stop_ for them.
+HOST_XR_STATE_OBJECTS := $(addprefix $(HOST_BUILD_DIR)/,$(XR_STATE_SOURCES:.c=.o))
+$(HOST_XR_STATE_OBJECTS): HOST_CFLAGS += -fno-data-sections -Wno-unused-parameter -Wno-sign-compare \
+	-Wno-unused-variable -Wno-unused-but-set-variable
 
 # Explicit pattern under HOST_BUILD_DIR only (do not collide with sdk ARM rules).
 $(HOST_BUILD_DIR)/src/%.o: src/%.c
 	$(V)mkdir -p $(dir $@)
 	$(V)$(ECHO) [ CC HOST ] $<
 	$(V)$(HOST_CC) $(HOST_CFLAGS) -MMD -MP -MF"$(@:%.o=%.d)" -c $< -o $@
+	$(V)$(if $(filter $@,$(HOST_XR_STATE_OBJECTS)),objcopy --rename-section .data=xrstate_data \
+		--rename-section .bss=xrstate_bss --rename-section .data.rel.local=xrstate_data \
+		--rename-section .data.rel=xrstate_data $@,true)
 
 $(HOST_BUILD_DIR)/host/%.o: host/%.c
 	$(V)mkdir -p $(dir $@)
@@ -95,7 +105,7 @@ $(HOST_BUILD_DIR)/host/%.o: host/%.c
 
 host_clean:
 	$(V)rm -rf build/host
-	$(V)rm -f $(CORE_NAME)_host ExampleHB_host
+	$(V)rm -f $(CORE_NAME)_host RickDangerous_host
 
 clean:: host_clean
 

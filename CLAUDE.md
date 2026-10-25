@@ -1,4 +1,63 @@
-# CLAUDE.md — Porting an emulator core (Retro-Go SD)
+# CLAUDE.md — Rick Dangerous homebrew (Retro-Go SD)
+
+This repo is ONE GWHB homebrew: Rick Dangerous (xrick) for the Game &
+Watch, built with the retro-go-sd-templates SDK. The second part of this
+file is the SDK's generic porting guide (memory map, audio, ABI).
+
+## Project notes
+
+- Target firmware: Retro-Go SD v2.0.0-rc1+ (ABI v2). `/homebrews/RickDangerous.bin`
+  + `RickDangerous.xrk` (same stem), cached in external flash
+  (`odroid_overlay_cache_file_in_flash`) and read in place.
+- Engine: `src/xrick` = xrick by Pierluigi Vicinanza (foolsh/xrick @
+  f7dd969, data version 2014, `#define GFXST`). Changes only under
+  `#ifdef GNW`: `game_gnw_init/frame/getname` in game.c (the front end drives
+  one frame per call), CRC-32 instead of miniz (resources.c), the high half
+  of `e_them_rndseed` in e_them.c (upstream read 2 bytes past it).
+- Data: NOT in the repo. `make` fetches foolsh/xrick's `assets` at that
+  commit into `build/xrick-data/`; `tools/make_pack.py` makes the pack
+  ("XRK1", sorted file table, 4-byte aligned data; names as in
+  filelist.dat: `graphics/...`, `sounds/...`). The release zip carries the
+  pack (Nicolas's choice), `scripts/stage_release.py`.
+- Port (`src/port`): `xr_sys.c` = xrick's system layer (sysmem stack in a
+  320 KB ram_malloc block, 320x200 8-bit fb, palette -> RGB565, game clock
+  `xr_clock_ms` += 40 per frame, sounds played in place from the pack,
+  8 channels mixed at 22050 Hz); `xr_pack.c` = what is NOT game state
+  (pack, files, memory block, buttons, fatal); `xr_main.c` = app_main
+  (50 Hz LCD, a game frame every 2nd VBL, 441 samples per VBL; A = fire,
+  B = up, GAME/TIME = pause; high scores in /retro-go/saves/xrick/).
+- Save states (`xr_state.c`): all xrick objects + xr_sys.o are compiled
+  without data sections and their .data/.bss renamed `xrstate_data` /
+  `xrstate_bss` (Makefile: target-specific `CP` = objcopy with
+  --rename-section, used by the SDK's compile rule; host/Makefile.host
+  does the same after compiling). `src/port/xr_core.ld` (copy of the SDK
+  script) keeps them inside .data/.bss with __start/__stop symbols; on the
+  PC the linker makes them. State = header + both blocks + the used part
+  of the memory block; refused unless same addresses/sizes and same pack;
+  pointers into the pack (sounds) rebased (`xr_sound_rebase`). Any new
+  game variable must live in those objects (or in xr_pack.c if it is not
+  state).
+- PC build: `make host`; `./RickDangerous_host dir/RickDangerous.bin`
+  (the .xrk beside it). Tests: `XR_FAST=1 XR_FRAMES=n XR_SCRIPT="vbl:keys,..."
+  XR_SHOTS=dir XR_SHOT_AT=... XR_STATE=f XR_SAVE_AT=/XR_LOAD_AT=`; with
+  `setarch -R` states load across runs (same addresses).
+- gwemu: the firmware (sylverb/game-and-watch-retro-go-sd @ v2.0.0-rc1,
+  `make INTFLASH_BANK=1 release`) + gwemu built from slash-proc/gwemu
+  (gnw-h7b0; subprojects keycodemapdb / berkeley-*float cloned from the
+  github.com/qemu mirrors, apt libepoxy-dev libfdt-dev nlohmann-json3-dev).
+  Timelines (`GNW_TIMELINE`, `0:06 press a`, `screenshot x.png`) with
+  `-display none`. Checked: launch, game, pause menu, save/reload, resume
+  from the launcher; FPS 49.9, busy ~2 %.
+
+### Releases
+
+- `CHANGELOG.md` section `## [vX.Y.Z] - date`; a release made on github.com
+  with tag `vX.Y.Z` makes the CI build and attach `RickDangerous-vX.Y.Z.zip`
+  (homebrews/RickDangerous.bin + .xrk, INSTALL.md) and a debug zip.
+
+---
+
+# SDK guide — porting an emulator core (Retro-Go SD)
 
 This repository is a **single-project** template for a Game & Watch
 **dynamic core** or a **GWHB homebrew**: a freestanding Cortex-M7 binary
